@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Constraint Region Explorer — Ridge vs Lasso</title>
+<style>
+  :root {
+    --bg: #eef4fb;
+    --fg: #1a2230;
+    --muted: #5f6b7d;
+    --tab-bg: #dbe7f5;
+    --tab-fg: #3a4759;
+    --tab-hover: #c9daee;
+    --border: #c2d3e8;
+    --panel: #e2ecf8;
+    --grid: #c2d3e8;
+    --axis: #8fa6c2;
+    --ellipse: #2563eb;
+    --region: #e11d48;
+    --solution: #1a2230;
+    --optimum: #2563eb;
+    --dense: #facc15;
+    --sparse: #22c55e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b2433;
+      --fg: #e6ecf5;
+      --muted: #9aa7bb;
+      --tab-bg: #27344a;
+      --tab-fg: #c2ccdc;
+      --tab-hover: #324158;
+      --border: #364964;
+      --panel: #222e42;
+      --grid: #2c3a52;
+      --axis: #54678a;
+      --ellipse: #60a5fa;
+      --region: #fb7185;
+      --solution: #e6ecf5;
+      --optimum: #60a5fa;
+      --dense: #fde047;
+      --sparse: #4ade80;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 1.25rem;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+  .caption {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: .85rem;
+  }
+  .tab-row { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+  .tab-btn {
+    padding: 5px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--tab-bg);
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--tab-fg);
+    font-family: inherit;
+    font-weight: 500;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .tab-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .tab-btn#mb-lasso.active { background: #e11d48; border-color: #e11d48; }
+  .tab-btn:hover:not(.active) { background: var(--tab-hover); }
+
+  .stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  .plot-wrap { flex: 1 1 320px; min-width: 280px; max-width: 360px; }
+  svg { width: 100%; height: auto; display: block; touch-action: none; }
+
+  .controls { flex: 1 1 200px; min-width: 200px; }
+  .slider-block { margin-bottom: 1rem; }
+  .slider-block label {
+    display: flex; justify-content: space-between;
+    font-size: 12.5px; color: var(--muted); margin-bottom: .35rem;
+  }
+  .slider-block label b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #2563eb; cursor: pointer; }
+  body.lasso input[type=range] { accent-color: #e11d48; }
+
+  .readout {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .7rem .85rem;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .readout .row { display: flex; justify-content: space-between; }
+  .readout .row b { font-variant-numeric: tabular-nums; }
+  .zero-flag { color: var(--region); font-weight: 700; }
+
+  .legend {
+    display: flex; gap: 1.1rem; flex-wrap: wrap;
+    margin-top: .8rem; font-size: 12px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .swatch.dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  .note {
+    margin-top: .85rem;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .hint { font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="caption">Constraint region — where the solution lands</div>
+
+<div class="tab-row">
+  <button class="tab-btn active" id="mb-ridge" onclick="setMethod('ridge')">Ridge (L2) — circle</button>
+  <button class="tab-btn" id="mb-lasso" onclick="setMethod('lasso')">Lasso (L1) — diamond</button>
+</div>
+
+<div class="stage">
+  <div class="plot-wrap">
+    <svg id="plot" viewBox="0 0 360 360" aria-label="Weight plane showing loss contours, the constraint region, the unregularized optimum, and the regularized solution.">
+      <defs>
+        <clipPath id="outsideRegion" clip-rule="evenodd">
+          <path id="clipPath" clip-rule="evenodd"></path>
+        </clipPath>
+      </defs>
+      <g id="grid"></g>
+      <g id="axes"></g>
+      <g id="pathring"></g>
+      <g id="ellipses" clip-path="url(#outsideRegion)"></g>
+      <path id="region" fill="none" stroke-width="2"></path>
+      <circle id="solution" r="5.5"></circle>
+      <circle id="optimum" r="6" stroke="#fff" stroke-width="1.5"></circle>
+      <text id="lbl-w1" font-size="12" font-style="italic">w₁</text>
+      <text id="lbl-w2" font-size="12" font-style="italic">w₂</text>
+    </svg>
+  </div>
+
+  <div class="controls">
+    <div class="slider-block">
+      <label>Optimum position <b id="posVal">36°</b></label>
+      <input type="range" id="pos" min="0" max="360" step="1" value="36">
+    </div>
+    <div class="slider-block">
+      <label>Regularization strength λ <b id="lamVal">0.50</b></label>
+      <input type="range" id="lam" min="0" max="1" step="0.01" value="0.5">
+    </div>
+    <div class="readout">
+      <div class="row"><span>Solution w₁</span><b id="outW1">—</b></div>
+      <div class="row"><span>Solution w₂</span><b id="outW2">—</b></div>
+      <div class="row" id="statusRow"><span>Solution</span><b id="status">—</b></div>
+    </div>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--ellipse)"></i> loss contours</span>
+      <span><i class="swatch" style="background:var(--region)"></i> constraint</span>
+      <span><i class="swatch dot" style="background:var(--optimum)"></i> unreg. optimum</span>
+      <span><i class="swatch dot" style="background:var(--solution)"></i> solution</span>
+      <span><i class="swatch" style="background:var(--dense)"></i> path: dense</span>
+      <span><i class="swatch" style="background:var(--sparse)"></i> path: sparse</span>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  Use the <span class="hint">position slider</span> to move the unregularized optimum around its circular path, and
+  the <span class="hint">λ slider</span> to grow that path outward. The loss circle expands until it just
+  <em>touches</em> the fixed constraint region — that tangent point is the solution. The path is
+  <span style="color:var(--dense);font-weight:600">yellow</span> where the result is dense and
+  <span style="color:var(--sparse);font-weight:600">green</span> where Lasso drives a weight to exactly zero.
+</p>
+
+<script>
+const SVG = 360, C = 180, SCALE = 42; // px per weight unit; origin at center
+
+const svg = document.getElementById('plot');
+function W2P(wx, wy) { return [C + wx * SCALE, C - wy * SCALE]; }   // weight -> pixel
+function P2W(px, py) { return [(px - C) / SCALE, (C - py) / SCALE]; } // pixel -> weight
+
+function cssvar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+// ---- static grid + axes ----
+function drawGrid() {
+  const g = document.getElementById('grid'); g.innerHTML = '';
+  const ax = document.getElementById('axes'); ax.innerHTML = '';
+  const grid = cssvar('--grid'), axis = cssvar('--axis');
+  for (let i = -4; i <= 4; i++) {
+    const [x] = W2P(i, 0);
+    g.insertAdjacentHTML('beforeend',
+      `<line x1="${x}" y1="0" x2="${x}" y2="${SVG}" stroke="${grid}" stroke-width="1"/>`);
+    const [, y] = W2P(0, i);
+    g.insertAdjacentHTML('beforeend',
+      `<line x1="0" y1="${y}" x2="${SVG}" y2="${y}" stroke="${grid}" stroke-width="1"/>`);
+  }
+  ax.insertAdjacentHTML('beforeend',
+    `<line x1="0" y1="${C}" x2="${SVG}" y2="${C}" stroke="${axis}" stroke-width="1.5"/>`);
+  ax.insertAdjacentHTML('beforeend',
+    `<line x1="${C}" y1="0" x2="${C}" y2="${SVG}" stroke="${axis}" stroke-width="1.5"/>`);
+}
+
+// ---- model ----
+// The optimum moves outward as λ grows (like before). But the touch point —
+// where the loss contour meets the constraint boundary — is ANCHORED: it is
+// computed once from the optimum's direction and the fixed region, then held
+// fixed as λ slides the optimum outward. The contours simply stretch so the
+// solution stays put while the optimum recedes.
+let posDeg = 36;     // angle of optimum from the w1 axis, degrees
+let method = 'ridge';
+let lambda = 0.5;
+
+const C_FIXED = 1.6;     // constraint radius — constant
+
+let opt = { x: 0, y: 0 };
+function updateOptimum() {
+  const dist = 1.9 + lambda * 2.4;   // always outside the region; recedes as λ grows
+  const a = posDeg * Math.PI / 180;
+  opt.x = dist * Math.cos(a);
+  opt.y = dist * Math.sin(a);
+}
+
+// Isotropic loss — contours are perfect circles centred on the optimum.
+const Lxx = 1.0, Lyy = 1.0, Lxy = 0.0;
+function lossAt(wx, wy, ox, oy) {
+  const dx = wx - ox, dy = wy - oy;
+  return Lxx*dx*dx + Lyy*dy*dy + 2*Lxy*dx*dy;
+}
+function loss(wx, wy) { return lossAt(wx, wy, opt.x, opt.y); }
+
+// Constraint region radius is fixed.
+function radius() { return C_FIXED; }
+
+// Solve: minimise loss (about the DISPLAYED optimum) subject to the fixed
+// constraint, by scanning the boundary. The touch point is the closest boundary
+// point to the optimum — so a loss circle of radius |optimum − touch| is exactly
+// tangent to the constraint there.
+function solve() {
+  const c = radius();
+  const insideR = (method === 'ridge')
+    ? (opt.x*opt.x + opt.y*opt.y) <= c*c
+    : (Math.abs(opt.x) + Math.abs(opt.y)) <= c;
+  if (insideR) return { x: opt.x, y: opt.y, c, onBoundary: false };
+
+  let best = null, bestL = Infinity;
+  const N = 3000;
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2;
+    let px, py;
+    if (method === 'ridge') {
+      px = c * Math.cos(t); py = c * Math.sin(t);
+    } else {
+      const cx = Math.cos(t), sy = Math.sin(t);
+      const k = c / (Math.abs(cx) + Math.abs(sy));
+      px = k * cx; py = k * sy;
+    }
+    const l = lossAt(px, py, opt.x, opt.y);
+    if (l < bestL) { bestL = l; best = { x: px, y: py }; }
+  }
+  best.c = c; best.onBoundary = true;
+  return best;
+}
+
+// ---- ellipse rendering: draw a few loss contours through/around the solution ----
+function ellipsePath(levelL) {
+  // trace L(w)=levelL around opt by angle sweep (solve quadratic along each ray)
+  const pts = [];
+  for (let i = 0; i <= 72; i++) {
+    const t = (i / 72) * Math.PI * 2;
+    const ux = Math.cos(t), uy = Math.sin(t);
+    // L(opt + r*u) = levelL -> quadratic a r^2 = levelL  (linear term 0 at centre)
+    const a = Lxx*ux*ux + Lyy*uy*uy + 2*Lxy*ux*uy;
+    const r = Math.sqrt(levelL / a);
+    const [px, py] = W2P(opt.x + r*ux, opt.y + r*uy);
+    pts.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+  }
+  return 'M' + pts.join(' L') + ' Z';
+}
+
+function render() {
+  const sol = solve();
+  const ell = document.getElementById('ellipses');
+  ell.innerHTML = '';
+  const ellColor = cssvar('--ellipse');
+
+  // The MAIN loss circle is centred on the optimum and passes exactly through
+  // the solution — its radius is the optimum→solution distance. Since the
+  // solution is the closest boundary point to the optimum, this circle is
+  // tangent to the constraint region right at the touch point.
+  const rMain = Math.hypot(opt.x - sol.x, opt.y - sol.y);
+  const radii = [rMain*0.5, rMain*0.75, rMain];
+  radii.forEach((rad) => {
+    const isMain = Math.abs(rad - rMain) < 1e-6;
+    const levelL = rad * rad;   // isotropic: L = r^2
+    ell.insertAdjacentHTML('beforeend',
+      `<path d="${ellipsePath(levelL)}" fill="none" stroke="${ellColor}" ` +
+      `stroke-width="${isMain ? 2.2 : 1}" opacity="${isMain ? 0.95 : 0.32}"/>`);
+  });
+
+  // constraint region
+  const reg = document.getElementById('region');
+  reg.setAttribute('stroke', cssvar('--region'));
+  reg.setAttribute('fill', cssvar('--region'));
+  reg.setAttribute('fill-opacity', '0.07');
+  const c = sol.c;
+  const regPathStr = regionPath(c);
+  reg.setAttribute('d', regPathStr);
+
+  // Clip the loss contours so they never draw inside the constraint region:
+  // a full-plane rect with the region punched out (evenodd fill rule).
+  document.getElementById('clipPath').setAttribute(
+    'd', `M0,0 H${SVG} V${SVG} H0 Z ` + regPathStr);
+
+  // points
+  const [ox, oy] = W2P(opt.x, opt.y);
+  const optEl = document.getElementById('optimum');
+  optEl.setAttribute('cx', ox); optEl.setAttribute('cy', oy);
+  optEl.setAttribute('fill', cssvar('--optimum'));
+
+  const [sx, sy] = W2P(sol.x, sol.y);
+  const solEl = document.getElementById('solution');
+  solEl.setAttribute('cx', sx); solEl.setAttribute('cy', sy);
+  solEl.setAttribute('fill', cssvar('--solution'));
+
+  // readout
+  const zx = Math.abs(sol.x) < 0.04, zy = Math.abs(sol.y) < 0.04;
+  document.getElementById('outW1').innerHTML = fmt(sol.x, zx && method === 'lasso');
+  document.getElementById('outW2').innerHTML = fmt(sol.y, zy && method === 'lasso');
+  const status = (method === 'lasso' && (zx || zy))
+    ? '<span class="zero-flag">sparse</span>'
+    : 'dense';
+  document.getElementById('status').innerHTML = status;
+}
+
+function fmt(v, isZero) {
+  if (isZero) return '<span class="zero-flag">0</span>';
+  return v.toFixed(2);
+}
+
+// Path string for the constraint region (circle for Ridge, diamond for Lasso).
+function regionPath(c) {
+  if (method === 'ridge') {
+    const [cx, cy] = W2P(0, 0);
+    const r = c * SCALE;
+    return `M${cx-r},${cy} a${r},${r} 0 1,0 ${2*r},0 a${r},${r} 0 1,0 ${-2*r},0 Z`;
+  }
+  const p1 = W2P(c, 0), p2 = W2P(0, c), p3 = W2P(-c, 0), p4 = W2P(0, -c);
+  return `M${p1[0]},${p1[1]} L${p2[0]},${p2[1]} L${p3[0]},${p3[1]} L${p4[0]},${p4[1]} Z`;
+}
+
+// Solve the touch point for an arbitrary reference optimum (used by the ring
+// classifier to test every angle around the path).
+function solveFor(rx, ry) {
+  const c = C_FIXED;
+  const insideR = (method === 'ridge')
+    ? (rx*rx + ry*ry) <= c*c
+    : (Math.abs(rx) + Math.abs(ry)) <= c;
+  if (insideR) return { x: rx, y: ry };
+  let best = null, bestL = Infinity;
+  const N = 1200;
+  for (let i = 0; i < N; i++) {
+    const t = (i / N) * Math.PI * 2;
+    let px, py;
+    if (method === 'ridge') {
+      px = c * Math.cos(t); py = c * Math.sin(t);
+    } else {
+      const cx = Math.cos(t), sy = Math.sin(t);
+      const k = c / (Math.abs(cx) + Math.abs(sy));
+      px = k * cx; py = k * sy;
+    }
+    const l = lossAt(px, py, rx, ry);
+    if (l < bestL) { bestL = l; best = { x: px, y: py }; }
+  }
+  return best;
+}
+
+function isSparseAt(angleDeg) {
+  // Ridge never produces an exact zero — it is dense everywhere by definition.
+  if (method === 'ridge') return false;
+  const a = angleDeg * Math.PI / 180;
+  const d = optDist(lambda);
+  const rx = d * Math.cos(a), ry = d * Math.sin(a);
+  const s = solveFor(rx, ry);
+  return Math.abs(s.x) < 0.04 || Math.abs(s.y) < 0.04;
+}
+
+// Distance of the optimum from the origin for a given λ (matches updateOptimum).
+function optDist(lam) { return 1.9 + lam * 2.4; }
+
+// Draw the FULL circular path the optimum sweeps (radius = current optimum
+// distance), colour-coded around the whole circumference: green where the
+// selected method yields a sparse solution, yellow where dense.
+function drawPathRing() {
+  const g = document.getElementById('pathring');
+  g.innerHTML = '';
+  const ringR = optDist(lambda) * SCALE;   // radius of the optimum's circular path
+  const [cx, cy] = W2P(0, 0);
+  const step = 2;                           // degrees per segment
+  for (let d = 0; d < 360; d += step) {
+    const sparse = isSparseAt(d + step / 2);
+    const a0 = -d * Math.PI / 180;          // negate: SVG y axis is flipped
+    const a1 = -(d + step) * Math.PI / 180;
+    const x0 = cx + ringR * Math.cos(a0), y0 = cy + ringR * Math.sin(a0);
+    const x1 = cx + ringR * Math.cos(a1), y1 = cy + ringR * Math.sin(a1);
+    const color = sparse ? 'var(--sparse)' : 'var(--dense)';
+    g.insertAdjacentHTML('beforeend',
+      `<path d="M${x0.toFixed(2)},${y0.toFixed(2)} A${ringR.toFixed(2)},${ringR.toFixed(2)} 0 0,0 ${x1.toFixed(2)},${y1.toFixed(2)}" ` +
+      `fill="none" stroke="${color}" stroke-width="3" stroke-linecap="butt" opacity="0.85"/>`);
+  }
+}
+
+// ---- labels ----
+function placeLabels() {
+  document.getElementById('lbl-w1').setAttribute('x', SVG - 18);
+  document.getElementById('lbl-w1').setAttribute('y', C - 6);
+  document.getElementById('lbl-w2').setAttribute('x', C + 6);
+  document.getElementById('lbl-w2').setAttribute('y', 14);
+  document.getElementById('lbl-w1').setAttribute('fill', cssvar('--muted'));
+  document.getElementById('lbl-w2').setAttribute('fill', cssvar('--muted'));
+}
+
+// ---- interaction ----
+function setMethod(m) {
+  if (method === m) return;
+  method = m;
+  document.body.classList.toggle('lasso', m === 'lasso');
+  document.getElementById('mb-ridge').classList.toggle('active', m === 'ridge');
+  document.getElementById('mb-lasso').classList.toggle('active', m === 'lasso');
+  drawPathRing();
+  render();
+}
+
+document.getElementById('pos').addEventListener('input', e => {
+  posDeg = parseFloat(e.target.value);
+  document.getElementById('posVal').textContent = posDeg.toFixed(0) + '°';
+  updateOptimum();
+  drawPathRing();
+  render();
+});
+
+document.getElementById('lam').addEventListener('input', e => {
+  lambda = parseFloat(e.target.value);
+  document.getElementById('lamVal').textContent = lambda.toFixed(2);
+  updateOptimum();
+  drawPathRing();
+  render();
+});
+
+// theme change
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    drawGrid(); placeLabels(); drawPathRing(); render();
+  });
+}
+
+drawGrid();
+placeLabels();
+document.getElementById('posVal').textContent = posDeg.toFixed(0) + '°';
+document.getElementById('lamVal').textContent = lambda.toFixed(2);
+updateOptimum();
+drawPathRing();
+render();
+</script>
+</body>
+</html>
