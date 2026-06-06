@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lasso Regression — Interactive</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  :root {
+    --bg: #eef4fb;
+    --fg: #1a2230;
+    --muted: #5f6b7d;
+    --tab-bg: #dbe7f5;
+    --tab-fg: #3a4759;
+    --tab-hover: #c9daee;
+    --border: #c2d3e8;
+    --tag-bg: #e2ecf8;
+    --grid: rgba(40,60,90,.10);
+    --accent: #e11d48;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b2433;
+      --fg: #e6ecf5;
+      --muted: #9aa7bb;
+      --tab-bg: #27344a;
+      --tab-fg: #c2ccdc;
+      --tab-hover: #324158;
+      --border: #364964;
+      --tag-bg: #222e42;
+      --grid: rgba(180,200,230,.12);
+      --accent: #fb7185;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 1.25rem;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+  .caption {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: .85rem;
+  }
+  .tab-row { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+  .tab-btn {
+    padding: 5px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--tab-bg);
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--tab-fg);
+    font-family: inherit;
+    font-weight: 500;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .tab-btn.active { background: #e11d48; color: #fff; border-color: #e11d48; }
+  .tab-btn:hover:not(.active) { background: var(--tab-hover); }
+  .chart-wrap { position: relative; height: 260px; }
+  .note {
+    margin-top: .75rem;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .zero-legend {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin-top: .6rem;
+    font-size: 12px;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  .zero-tag {
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--fg);
+  }
+</style>
+</head>
+<body>
+
+<div class="caption">Lasso regression — predicted salary vs age</div>
+
+<div class="tab-row">
+  <button class="tab-btn active" id="l0" onclick="setLasso(0)">λ = 0.02</button>
+  <button class="tab-btn" id="l1" onclick="setLasso(1)">λ = 0.10</button>
+  <button class="tab-btn" id="l2" onclick="setLasso(2)">λ = 1.00</button>
+</div>
+
+<div class="chart-wrap">
+  <canvas id="lassoChart" role="img" aria-label="Line chart showing Lasso regression salary predictions for different lambda values against training data points.">Lasso regression predictions chart.</canvas>
+</div>
+
+<div class="zero-legend">
+  Active weights: <span id="activeWeights"></span>
+</div>
+
+<p class="note">
+  Observe how the curve simplifies as λ increases. At λ = 1, the model uses only x and x⁵ — a much simpler model than the original 5th-degree polynomial.
+</p>
+
+<script>
+const ages = [];
+for (let a = 18; a <= 72; a += 0.5) ages.push(a);
+
+const trainX = [25,55,27,35,60,65,45,40,50,30];
+const trainY = [85,280,90,130,250,240,220,180,270,110];
+
+const means = [43.2, 2045, 104231, 5610457, 314153953];
+const stds  = [14.1, 1259, 89653, 5975341, 389179640];
+
+function scale(x) {
+  const f = [x, x*x, x*x*x, x*x*x*x, x*x*x*x*x];
+  return f.map((v, i) => (v - means[i]) / stds[i]);
+}
+
+function predict(coeffs, x) {
+  const [a, w1, w2, w3, w4, w5] = coeffs;
+  const s = scale(x);
+  return a + w1*s[0] + w2*s[1] + w3*s[2] + w4*s[3] + w5*s[4];
+}
+
+// [a, w1, w2, w3, w4, w5] — genuine Lasso fits for the standardized features used by scale()
+const lassoCoeffs = [
+  [185.38, -142.96, 380.76, 0, 0, -180.20],  // λ=0.02  — active: x, x², x⁵
+  [185.47, 0, 81.18, 161.47, 0, -183.23],    // λ=0.10  — active: x², x³, x⁵
+  [185.50, 124.88, 0, 0, 0, -60.78],         // λ=1.00  — active: x, x⁵
+];
+
+const featureNames = ['x', 'x²', 'x³', 'x⁴', 'x⁵'];
+
+const trainPts = trainX.map((x, i) => ({ x, y: trainY[i] }));
+
+// Read theme colors from CSS variables so the chart matches light/dark mode.
+function themeColors() {
+  const cs = getComputedStyle(document.documentElement);
+  return {
+    grid: cs.getPropertyValue('--grid').trim(),
+    muted: cs.getPropertyValue('--muted').trim(),
+    fg: cs.getPropertyValue('--fg').trim(),
+    accent: cs.getPropertyValue('--accent').trim(),
+  };
+}
+
+const PTS = '#2563eb';   // training points — blue (contrasts the red Lasso line)
+
+function curve(i) {
+  return ages.map(a => ({
+    x: a,
+    y: Math.max(0, Math.min(340, predict(lassoCoeffs[i], a)))
+  }));
+}
+
+const ctx = document.getElementById('lassoChart').getContext('2d');
+const tc = themeColors();
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    datasets: [
+      {
+        label: 'Prediction',
+        data: curve(0),
+        borderColor: tc.accent,
+        borderWidth: 2.5,
+        pointRadius: 0,
+        tension: 0.3,
+      },
+      {
+        label: 'Training data',
+        data: trainPts,
+        type: 'scatter',
+        backgroundColor: PTS,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: true,
+        labels: { color: tc.fg, font: { size: 12 }, boxWidth: 14, padding: 12 }
+      }
+    },
+    scales: {
+      x: {
+        type: 'linear', min: 18, max: 72,
+        title: { display: true, text: 'Age (years)', color: tc.fg, font: { size: 12 } },
+        grid: { color: tc.grid },
+        ticks: { color: tc.muted, font: { size: 11 } }
+      },
+      y: {
+        min: 0, max: 340,
+        title: { display: true, text: 'Salary ($k)', color: tc.fg, font: { size: 12 } },
+        grid: { color: tc.grid },
+        ticks: { color: tc.muted, font: { size: 11 } }
+      }
+    }
+  }
+});
+
+// Re-apply theme colors to the chart when the system scheme changes.
+function applyChartTheme() {
+  const c = themeColors();
+  const s = chart.options.scales;
+  chart.data.datasets[0].borderColor = c.accent;
+  chart.options.plugins.legend.labels.color = c.fg;
+  s.x.title.color = c.fg; s.x.grid.color = c.grid; s.x.ticks.color = c.muted;
+  s.y.title.color = c.fg; s.y.grid.color = c.grid; s.y.ticks.color = c.muted;
+  chart.update();
+}
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', applyChartTheme);
+}
+
+function updateWeightDisplay(i) {
+  const weights = lassoCoeffs[i].slice(1); // skip bias
+  const active = weights
+    .map((w, j) => w !== 0 ? `<span class="zero-tag">${featureNames[j]}</span>` : null)
+    .filter(Boolean)
+    .join(' ');
+  document.getElementById('activeWeights').innerHTML = active || 'none';
+}
+
+const btns = ['l0', 'l1', 'l2'];
+function setLasso(i) {
+  btns.forEach((id, j) => document.getElementById(id).classList.toggle('active', i === j));
+  chart.data.datasets[0].data = curve(i);
+  chart.update();
+  updateWeightDisplay(i);
+}
+
+updateWeightDisplay(0);
+</script>
+</body>
+</html>
