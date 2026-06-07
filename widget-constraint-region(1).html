@@ -175,9 +175,10 @@
 </div>
 
 <p class="note">
-  Use the <span class="hint">position slider</span> to move the unregularized optimum around its circular path, and
-  the <span class="hint">λ slider</span> to grow that path outward. The loss circle expands until it just
-  <em>touches</em> the fixed constraint region — that tangent point is the solution. The path is
+  The unregularized optimum stays fixed — use the <span class="hint">position slider</span> to move it around
+  its circle. As you raise <span class="hint">λ</span>, the constraint <em>budget shrinks</em>: the region
+  contracts toward the origin, pulling the solution along the boundary. The loss circle just <em>touches</em>
+  that shrinking region, and the touch point is the solution. The path is
   <span style="color:var(--dense);font-weight:600">yellow</span> where the result is dense and
   <span style="color:var(--sparse);font-weight:600">green</span> where Lasso drives a weight to exactly zero.
 </p>
@@ -211,23 +212,22 @@ function drawGrid() {
 }
 
 // ---- model ----
-// The optimum moves outward as λ grows (like before). But the touch point —
-// where the loss contour meets the constraint boundary — is ANCHORED: it is
-// computed once from the optimum's direction and the fixed region, then held
-// fixed as λ slides the optimum outward. The contours simply stretch so the
-// solution stays put while the optimum recedes.
+// The unregularized optimum is FIXED in place (its distance from the origin is
+// constant). Raising λ shrinks the constraint region toward the origin. The
+// loss contours stay centred on the fixed optimum; the solution is the point on
+// the (shrinking) constraint boundary closest to that optimum, so the main loss
+// circle is tangent to the region right at the touch point.
 let posDeg = 36;     // angle of optimum from the w1 axis, degrees
 let method = 'ridge';
 let lambda = 0.5;
 
-const C_FIXED = 1.6;     // constraint radius — constant
+const OPT_DIST = 3.1;    // optimum distance from origin — constant
 
 let opt = { x: 0, y: 0 };
 function updateOptimum() {
-  const dist = 1.9 + lambda * 2.4;   // always outside the region; recedes as λ grows
   const a = posDeg * Math.PI / 180;
-  opt.x = dist * Math.cos(a);
-  opt.y = dist * Math.sin(a);
+  opt.x = OPT_DIST * Math.cos(a);
+  opt.y = OPT_DIST * Math.sin(a);
 }
 
 // Isotropic loss — contours are perfect circles centred on the optimum.
@@ -238,19 +238,16 @@ function lossAt(wx, wy, ox, oy) {
 }
 function loss(wx, wy) { return lossAt(wx, wy, opt.x, opt.y); }
 
-// Constraint region radius is fixed.
-function radius() { return C_FIXED; }
+// Constraint region radius SHRINKS as λ grows (the budget tightens).
+function radius(lam) { return 2.4 - lam * 2.1; }
 
-// Solve: minimise loss (about the DISPLAYED optimum) subject to the fixed
-// constraint, by scanning the boundary. The touch point is the closest boundary
-// point to the optimum — so a loss circle of radius |optimum − touch| is exactly
-// tangent to the constraint there.
-function solve() {
-  const c = radius();
+// Solve: minimise loss subject to the constraint, by scanning the boundary.
+// The touch point is the closest boundary point to the optimum.
+function solveCore(c, ox, oy) {
   const insideR = (method === 'ridge')
-    ? (opt.x*opt.x + opt.y*opt.y) <= c*c
-    : (Math.abs(opt.x) + Math.abs(opt.y)) <= c;
-  if (insideR) return { x: opt.x, y: opt.y, c, onBoundary: false };
+    ? (ox*ox + oy*oy) <= c*c
+    : (Math.abs(ox) + Math.abs(oy)) <= c;
+  if (insideR) return { x: ox, y: oy, onBoundary: false };
 
   let best = null, bestL = Infinity;
   const N = 3000;
@@ -264,21 +261,25 @@ function solve() {
       const k = c / (Math.abs(cx) + Math.abs(sy));
       px = k * cx; py = k * sy;
     }
-    const l = lossAt(px, py, opt.x, opt.y);
+    const l = lossAt(px, py, ox, oy);
     if (l < bestL) { bestL = l; best = { x: px, y: py }; }
   }
-  best.c = c; best.onBoundary = true;
+  best.onBoundary = true;
   return best;
+}
+function solve() {
+  const c = radius(lambda);
+  const s = solveCore(c, opt.x, opt.y);
+  s.c = c;
+  return s;
 }
 
 // ---- ellipse rendering: draw a few loss contours through/around the solution ----
 function ellipsePath(levelL) {
-  // trace L(w)=levelL around opt by angle sweep (solve quadratic along each ray)
   const pts = [];
   for (let i = 0; i <= 72; i++) {
     const t = (i / 72) * Math.PI * 2;
     const ux = Math.cos(t), uy = Math.sin(t);
-    // L(opt + r*u) = levelL -> quadratic a r^2 = levelL  (linear term 0 at centre)
     const a = Lxx*ux*ux + Lyy*uy*uy + 2*Lxy*ux*uy;
     const r = Math.sqrt(levelL / a);
     const [px, py] = W2P(opt.x + r*ux, opt.y + r*uy);
@@ -293,10 +294,7 @@ function render() {
   ell.innerHTML = '';
   const ellColor = cssvar('--ellipse');
 
-  // The MAIN loss circle is centred on the optimum and passes exactly through
-  // the solution — its radius is the optimum→solution distance. Since the
-  // solution is the closest boundary point to the optimum, this circle is
-  // tangent to the constraint region right at the touch point.
+  // Main loss circle is centred on the optimum and passes through the solution.
   const rMain = Math.hypot(opt.x - sol.x, opt.y - sol.y);
   const radii = [rMain*0.5, rMain*0.75, rMain];
   radii.forEach((rad) => {
@@ -316,8 +314,7 @@ function render() {
   const regPathStr = regionPath(c);
   reg.setAttribute('d', regPathStr);
 
-  // Clip the loss contours so they never draw inside the constraint region:
-  // a full-plane rect with the region punched out (evenodd fill rule).
+  // Clip the loss contours so they never draw inside the constraint region.
   document.getElementById('clipPath').setAttribute(
     'd', `M0,0 H${SVG} V${SVG} H0 Z ` + regPathStr);
 
@@ -358,52 +355,22 @@ function regionPath(c) {
   return `M${p1[0]},${p1[1]} L${p2[0]},${p2[1]} L${p3[0]},${p3[1]} L${p4[0]},${p4[1]} Z`;
 }
 
-// Solve the touch point for an arbitrary reference optimum (used by the ring
-// classifier to test every angle around the path).
-function solveFor(rx, ry) {
-  const c = C_FIXED;
-  const insideR = (method === 'ridge')
-    ? (rx*rx + ry*ry) <= c*c
-    : (Math.abs(rx) + Math.abs(ry)) <= c;
-  if (insideR) return { x: rx, y: ry };
-  let best = null, bestL = Infinity;
-  const N = 1200;
-  for (let i = 0; i < N; i++) {
-    const t = (i / N) * Math.PI * 2;
-    let px, py;
-    if (method === 'ridge') {
-      px = c * Math.cos(t); py = c * Math.sin(t);
-    } else {
-      const cx = Math.cos(t), sy = Math.sin(t);
-      const k = c / (Math.abs(cx) + Math.abs(sy));
-      px = k * cx; py = k * sy;
-    }
-    const l = lossAt(px, py, rx, ry);
-    if (l < bestL) { bestL = l; best = { x: px, y: py }; }
-  }
-  return best;
-}
-
 function isSparseAt(angleDeg) {
-  // Ridge never produces an exact zero — it is dense everywhere by definition.
+  // Ridge never produces an exact zero — dense everywhere by definition.
   if (method === 'ridge') return false;
   const a = angleDeg * Math.PI / 180;
-  const d = optDist(lambda);
-  const rx = d * Math.cos(a), ry = d * Math.sin(a);
-  const s = solveFor(rx, ry);
+  const rx = OPT_DIST * Math.cos(a), ry = OPT_DIST * Math.sin(a);
+  const s = solveCore(radius(lambda), rx, ry);
   return Math.abs(s.x) < 0.04 || Math.abs(s.y) < 0.04;
 }
 
-// Distance of the optimum from the origin for a given λ (matches updateOptimum).
-function optDist(lam) { return 1.9 + lam * 2.4; }
-
-// Draw the FULL circular path the optimum sweeps (radius = current optimum
+// Draw the FULL circular path the optimum can occupy (radius = fixed optimum
 // distance), colour-coded around the whole circumference: green where the
-// selected method yields a sparse solution, yellow where dense.
+// selected method yields a sparse solution at the current λ, yellow where dense.
 function drawPathRing() {
   const g = document.getElementById('pathring');
   g.innerHTML = '';
-  const ringR = optDist(lambda) * SCALE;   // radius of the optimum's circular path
+  const ringR = OPT_DIST * SCALE;           // fixed radius of the optimum's circle
   const [cx, cy] = W2P(0, 0);
   const step = 2;                           // degrees per segment
   for (let d = 0; d < 360; d += step) {
@@ -451,8 +418,7 @@ document.getElementById('pos').addEventListener('input', e => {
 document.getElementById('lam').addEventListener('input', e => {
   lambda = parseFloat(e.target.value);
   document.getElementById('lamVal').textContent = lambda.toFixed(2);
-  updateOptimum();
-  drawPathRing();
+  drawPathRing();   // ring radius is fixed, but sparsity colouring depends on λ
   render();
 });
 
